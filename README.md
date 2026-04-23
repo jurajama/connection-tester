@@ -13,7 +13,7 @@ flags, and uses only the Python standard library.
 
 ```
 connection-tester.py -s [-p PORT] [-v] [-l FILE]
-connection-tester.py -c HOST [-p PORT] [-t SECONDS] [-v] [-l FILE]
+connection-tester.py -c HOST [-p PORT] [-t SECONDS] [-b BYTES] [-v] [-l FILE]
 ```
 
 ### Options
@@ -24,6 +24,7 @@ connection-tester.py -c HOST [-p PORT] [-t SECONDS] [-v] [-l FILE]
 | `-c HOST`, `--client HOST` | Run as a client and connect repeatedly to `HOST`. |
 | `-p PORT`, `--port PORT` | TCP port to use (default `5500`). |
 | `-t SECONDS`, `--hold SECONDS` | Seconds the client keeps each connection open before closing it (default `5.0`). |
+| `-b BYTES`, `--bytes BYTES` | Payload size the client sends and expects echoed back per connection (default `1500`, chosen to exercise full-MTU packet handling). Client-side only; the server echoes whatever it receives regardless of this flag. |
 | `-v`, `--verbose` | Print one line per connection open/close with timestamps, peer address, and duration. |
 | `-l FILE`, `--log FILE` | Also append log output to `FILE`. The log file always captures full per-connection detail regardless of `-v`. |
 
@@ -38,8 +39,8 @@ connection-tester.py -c HOST [-p PORT] [-t SECONDS] [-v] [-l FILE]
 ```
 
 The server binds to `0.0.0.0` on the given port, accepts connections, and
-reads until the peer closes the socket. It does not echo or otherwise
-interact with the data. Shut it down with `Ctrl-C`.
+reads until the peer closes the socket. Every byte received is echoed back
+to the peer unchanged. Shut it down with `Ctrl-C`.
 
 ### Client
 
@@ -49,9 +50,13 @@ interact with the data. Shut it down with `Ctrl-C`.
 ./connection-tester.py -c server.example.com -v -l client.log
 ```
 
-The client opens a TCP connection to `HOST:PORT`, holds it open for the
-configured number of seconds, closes it, and immediately opens a new one.
-This continues until `Ctrl-C`.
+The client opens a TCP connection to `HOST:PORT`, sends a payload of
+`--bytes` bytes, waits for the server to echo the same bytes back and
+verifies they match, then holds the connection open for `--hold` seconds
+before closing it and immediately opening a new one. This continues until
+`Ctrl-C`. Send failures, echo timeouts, and payload mismatches are reported
+on stderr. Example: `-b 65536` exercises large-packet / segmented I/O,
+`-b 1` exercises tiny packets.
 
 ## Output
 

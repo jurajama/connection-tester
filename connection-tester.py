@@ -8,6 +8,13 @@ from datetime import datetime
 
 DEFAULT_PORT = 5500
 DEFAULT_HOLD_SECONDS = 5.0
+DEFAULT_PAYLOAD_BYTES = 1500
+
+
+def make_payload(size: int) -> bytes:
+    base = bytes(range(256))
+    full, tail = divmod(size, 256)
+    return base * full + base[:tail]
 
 log = logging.getLogger("connection-tester")
 
@@ -86,6 +93,15 @@ def run_server(port: int, verbose: bool) -> None:
                         break
                     if not data:
                         break
+                    try:
+                        client_sock.sendall(data)
+                    except OSError as e:
+                        if verbose:
+                            newline()
+                            err = f"echo to {addr[0]}:{addr[1]} failed: {e}"
+                            print(err, file=sys.stderr)
+                        log.warning(f"echo to {addr[0]}:{addr[1]} failed: {e}")
+                        break
             finally:
                 try:
                     client_sock.shutdown(socket.SHUT_RDWR)
@@ -110,8 +126,18 @@ def run_server(port: int, verbose: bool) -> None:
         sock.close()
 
 
-def run_client(host: str, port: int, hold_seconds: float, verbose: bool) -> None:
-    msg = f"Client connecting repeatedly to {host}:{port}, holding each connection {hold_seconds}s"
+def run_client(
+    host: str,
+    port: int,
+    hold_seconds: float,
+    verbose: bool,
+    payload_bytes: int,
+) -> None:
+    payload = make_payload(payload_bytes)
+    msg = (
+        f"Client connecting repeatedly to {host}:{port}, "
+        f"holding each connection {hold_seconds}s, echo payload {payload_bytes} bytes"
+    )
     print(msg)
     log.info(msg)
 
@@ -141,24 +167,71 @@ def run_client(host: str, port: int, hold_seconds: float, verbose: bool) -> None
                 brief(".")
                 log.debug(f"attempt {attempt}: opened {sock.getsockname()} -> {host}:{port}")
 
+            echo_ok = True
             try:
-                sock.settimeout(hold_seconds + 1.0)
-                end_at = time.monotonic() + hold_seconds
-                while True:
-                    remaining = end_at - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    sock.settimeout(remaining)
-                    try:
-                        data = sock.recv(4096)
-                    except socket.timeout:
-                        break
-                    if not data:
+                sock.settimeout(10.0)
+                try:
+                    sock.sendall(payload)
+                except OSError as e:
+                    newline()
+                    err = f"attempt {attempt}: send of {len(payload)} bytes failed: {e}"
+                    print(err, file=sys.stderr)
+                    log.error(err)
+                    echo_ok = False
+
+                if echo_ok:
+                    received = bytearray()
+                    while len(received) < len(payload):
+                        try:
+                            chunk = sock.recv(
+                                min(4096, len(payload) - len(received))
+                            )
+                        except socket.timeout:
+                            newline()
+                            err = (
+                                f"attempt {attempt}: echo timeout after "
+                                f"{len(received)}/{len(payload)} bytes"
+                            )
+                            print(err, file=sys.stderr)
+                            log.error(err)
+                            echo_ok = False
+                            break
+                        if not chunk:
+                            newline()
+                            err = (
+                                f"attempt {attempt}: server closed after "
+                                f"{len(received)}/{len(payload)} echo bytes"
+                            )
+                            print(err, file=sys.stderr)
+                            log.warning(err)
+                            echo_ok = False
+                            break
+                        received.extend(chunk)
+                    if echo_ok and bytes(received) != payload:
                         newline()
-                        err = f"attempt {attempt}: server closed connection early"
+                        err = f"attempt {attempt}: echo payload mismatch"
                         print(err, file=sys.stderr)
-                        log.warning(err)
-                        break
+                        log.error(err)
+                        echo_ok = False
+
+                if echo_ok and hold_seconds > 0:
+                    sock.settimeout(hold_seconds + 1.0)
+                    end_at = time.monotonic() + hold_seconds
+                    while True:
+                        remaining = end_at - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        sock.settimeout(remaining)
+                        try:
+                            data = sock.recv(4096)
+                        except socket.timeout:
+                            break
+                        if not data:
+                            newline()
+                            err = f"attempt {attempt}: server closed connection early"
+                            print(err, file=sys.stderr)
+                            log.warning(err)
+                            break
             finally:
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
@@ -208,6 +281,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=f"Seconds to hold each client connection open (default {DEFAULT_HOLD_SECONDS})",
     )
     parser.add_argument(
+        "-b",
+        "--bytes",
+        type=int,
+        default=DEFAULT_PAYLOAD_BYTES,
+        dest="payload_bytes",
+        help=(
+            f"Bytes the client sends (and server echoes) per connection "
+            f"(default {DEFAULT_PAYLOAD_BYTES}). Client-side only."
+        ),
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Verbose per-connection logging"
     )
     parser.add_argument(
@@ -223,10 +307,16 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     setup_logging(args.verbose, args.log)
 
+    if args.payload_bytes < 0:
+        print("--bytes must be >= 0", file=sys.stderr)
+        sys.exit(2)
+
     if args.server:
         run_server(args.port, args.verbose)
     else:
-        run_client(args.client, args.port, args.hold, args.verbose)
+        run_client(
+            args.client, args.port, args.hold, args.verbose, args.payload_bytes
+        )
 
 
 if __name__ == "__main__":

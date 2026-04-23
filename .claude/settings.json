@@ -1,0 +1,7 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "excludedCommands": ["python3"]
+  },
+  "model": "opus"
+}
