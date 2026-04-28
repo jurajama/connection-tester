@@ -1,8 +1,8 @@
 # connection-tester
 
-A small Python 3 utility for exercising TCP connection stability. A single
-script acts as either the server or the client depending on command-line
-flags, and uses only the Python standard library.
+A small Python 3 utility for exercising TCP and UDP connection stability.
+A single script acts as either the server or the client depending on
+command-line flags, and uses only the Python standard library.
 
 ## Requirements
 
@@ -12,8 +12,8 @@ flags, and uses only the Python standard library.
 ## Usage
 
 ```
-connection-tester.py -s [-p PORT] [-v] [-l FILE]
-connection-tester.py -c HOST [-p PORT] [-t SECONDS] [-b BYTES] [-v] [-l FILE]
+connection-tester.py -s [-u] [-p PORT] [-v] [-l FILE]
+connection-tester.py -c HOST [-u] [-p PORT] [-t SECONDS] [-b BYTES] [-v] [-l FILE]
 ```
 
 ### Options
@@ -22,11 +22,12 @@ connection-tester.py -c HOST [-p PORT] [-t SECONDS] [-b BYTES] [-v] [-l FILE]
 | --- | --- |
 | `-s`, `--server` | Run as a server that listens for connections. |
 | `-c HOST`, `--client HOST` | Run as a client and connect repeatedly to `HOST`. |
-| `-p PORT`, `--port PORT` | TCP port to use (default `5500`). |
-| `-t SECONDS`, `--hold SECONDS` | Seconds the client keeps each connection open before closing it (default `5.0`). |
-| `-b BYTES`, `--bytes BYTES` | Payload size the client sends and expects echoed back per connection (default `1500`, chosen to exercise full-MTU packet handling). Client-side only; the server echoes whatever it receives regardless of this flag. |
-| `-v`, `--verbose` | Print one line per connection open/close with timestamps, peer address, and duration. |
-| `-l FILE`, `--log FILE` | Also append log output to `FILE`. The log file always captures full per-connection detail regardless of `-v`. |
+| `-u`, `--udp` | Use UDP instead of TCP. Must be set on both client and server. The application does not handle TCP and UDP simultaneously. |
+| `-p PORT`, `--port PORT` | Port to use (default `5500` for both TCP and UDP). |
+| `-t SECONDS`, `--hold SECONDS` | TCP: seconds the client keeps each connection open before closing it. UDP: seconds the client waits after a successful echo before sending the next packet (and also the back-off delay after a UDP error). Default `5.0`. |
+| `-b BYTES`, `--bytes BYTES` | Payload size the client sends and expects echoed back. TCP default `1500` (chosen to exercise full-MTU packet handling); UDP default `1300` (kept under typical Internet MTU to avoid IP fragmentation). Client-side only; the server echoes whatever it receives regardless of this flag. |
+| `-v`, `--verbose` | Print one line per cycle with timestamps, peer address, and (UDP) round-trip time in milliseconds. |
+| `-l FILE`, `--log FILE` | Also append log output to `FILE`. The log file always captures full per-cycle detail regardless of `-v`. |
 
 `-s` and `-c` are mutually exclusive and one of them is required.
 
@@ -58,15 +59,34 @@ before closing it and immediately opening a new one. This continues until
 on stderr. Example: `-b 65536` exercises large-packet / segmented I/O,
 `-b 1` exercises tiny packets.
 
+### UDP
+
+```
+./connection-tester.py -s -u
+./connection-tester.py -c 127.0.0.1 -u
+./connection-tester.py -c 10.20.30.1 -u -p 6000 -t 1 -v
+```
+
+With `-u` on both sides the tester switches to UDP. The server binds a UDP
+socket on `0.0.0.0:PORT` and echoes every datagram it receives back to the
+sender unchanged. The client sends a single datagram of `--bytes` bytes
+(default `1300`), waits up to **3 seconds** for the echo, then waits
+`--hold` seconds before sending the next test packet. If no response
+arrives within 3 seconds, the client always prints an error to stderr
+regardless of `-v`. With `-v` each successful round-trip prints the
+response time in milliseconds.
+
 ## Output
 
 By default both sides keep the console quiet:
 
-- Each successful connection prints a single `.` character.
+- Each successful connection (TCP) or echoed datagram (UDP) prints a
+  single `.` character.
 - A `Ctrl-C` stops the loop and prints a short summary line.
 
-With `-v` each open and close prints a timestamped line including the peer
-address and the connection duration.
+With `-v` each cycle prints a timestamped line. For TCP this includes the
+peer address and the connection duration; for UDP it includes the peer
+address and the round-trip time in milliseconds.
 
 Connection failures (and server-side early disconnects observed by the
 client) are always reported verbosely to stderr — `-v` does not suppress
